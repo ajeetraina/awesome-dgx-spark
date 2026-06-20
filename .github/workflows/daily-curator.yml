@@ -1,0 +1,156 @@
+# =============================================================================
+# Awesome DGX Spark — Daily Auto-Curator Workflow
+# =============================================================================
+# Runs the DGX Spark curator agent every morning at 9:00 AM UTC.
+# The agent uses NVIDIA Nemotron (via build.nvidia.com) to:
+#   1. Fetch today's DGX Spark news and announcements
+#   2. Discover new resources (blogs, GitHub repos, HuggingFace models, papers)
+#   3. Validate all discovered URLs
+#   4. Submit a PR to update the awesome list if new content is found
+#
+# Required repository secrets (Settings → Secrets → Actions):
+#   NVIDIA_API_KEY              — Free tier at https://build.nvidia.com
+#   GH_PAT                      — GitHub Personal Access Token with repo scope
+#
+# Manual trigger: Actions tab → "Daily DGX Spark Curator" → Run workflow
+# =============================================================================
+
+name: Daily DGX Spark Curator
+
+on:
+  # Run every morning at 9:00 AM UTC
+  schedule:
+    - cron: '0 9 * * *'
+
+  # Allow manual trigger from the Actions tab
+  workflow_dispatch:
+    inputs:
+      task:
+        description: 'Curator task to run'
+        required: false
+        default: 'Fetch today DGX Spark news and add any new resources to the awesome list'
+        type: string
+      dry_run:
+        description: 'Dry run (find resources but do not create PR)'
+        required: false
+        default: false
+        type: boolean
+
+jobs:
+  curate:
+    name: Curate DGX Spark Resources
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    permissions:
+      contents: write        # needed to push curator branches
+      pull-requests: write   # needed to open PRs
+
+    steps:
+      # -----------------------------------------------------------------------
+      # 1. Checkout the repository
+      # -----------------------------------------------------------------------
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GH_PAT }}
+
+      # -----------------------------------------------------------------------
+      # 2. Set up Docker with BuildKit (required for docker agent run)
+      # -----------------------------------------------------------------------
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # -----------------------------------------------------------------------
+      # 3. Install Docker AI Agent CLI
+      # -----------------------------------------------------------------------
+      - name: Install Docker AI Agent CLI
+        run: |
+          # Install the Docker AI Agent CLI (docker agent)
+          curl -fsSL https://raw.githubusercontent.com/docker/agent-cli/main/install.sh | sh
+          docker agent --version
+
+      # -----------------------------------------------------------------------
+      # 4. Determine the task to run
+      # -----------------------------------------------------------------------
+      - name: Set curator task
+        id: task
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ -n "${{ inputs.task }}" ]; then
+            echo "task=${{ inputs.task }}" >> $GITHUB_OUTPUT
+          else
+            TODAY=$(date +"%A, %B %d, %Y")
+            echo "task=Good morning! Today is ${TODAY}. Please fetch today's latest DGX Spark news and announcements, discover any new resources published in the last 24 hours, validate them, and create a PR to add them to the awesome list if any new resources are found." >> $GITHUB_OUTPUT
+          fi
+
+      # -----------------------------------------------------------------------
+      # 5. Run the Nemotron-powered curator agent
+      # -----------------------------------------------------------------------
+      - name: Run DGX Spark curator agent
+        env:
+          NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
+          GITHUB_PERSONAL_ACCESS_TOKEN: ${{ secrets.GH_PAT }}
+          DRY_RUN: ${{ inputs.dry_run || 'false' }}
+        run: |
+          echo "======================================"
+          echo "DGX Spark Auto-Curator — $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+          echo "Model: nvidia/llama-3.3-nemotron-super-49b-v1"
+          echo "Task: ${{ steps.task.outputs.task }}"
+          echo "======================================"
+
+          # Run the curator agent
+          docker agent run ./auto-curator-agent/dgx-spark-curator.yaml \
+            "${{ steps.task.outputs.task }}"
+
+      # -----------------------------------------------------------------------
+      # 6. Post run summary
+      # -----------------------------------------------------------------------
+      - name: Post curator summary
+        if: always()
+        run: |
+          echo "## DGX Spark Curator Run Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **Date:** $(date -u '+%Y-%m-%d %H:%M:%S UTC')" >> $GITHUB_STEP_SUMMARY
+          echo "- **Trigger:** ${{ github.event_name }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Model:** nvidia/llama-3.3-nemotron-super-49b-v1 (Nemotron Super 49B)" >> $GITHUB_STEP_SUMMARY
+          echo "- **Status:** ${{ job.status }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Check the [Pull Requests](https://github.com/ajeetraina/awesome-dgx-spark/pulls) tab for any new resources added today." >> $GITHUB_STEP_SUMMARY
+
+  # ---------------------------------------------------------------------------
+  # Weekly link checker — runs every Monday at 9 AM UTC
+  # ---------------------------------------------------------------------------
+  check-links:
+    name: Weekly Link Checker
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    if: github.event_name == 'schedule' && (github.event.schedule == '0 9 * * 1' || github.event_name == 'workflow_dispatch')
+
+    # Run only on Mondays (day 1). The main job runs daily; this is extra.
+    # To enable, add a second cron entry:  - cron: '0 9 * * 1'
+
+    permissions:
+      contents: write
+      pull-requests: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GH_PAT }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Install Docker AI Agent CLI
+        run: |
+          curl -fsSL https://raw.githubusercontent.com/docker/agent-cli/main/install.sh | sh
+
+      - name: Run link checker
+        env:
+          NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
+          GITHUB_PERSONAL_ACCESS_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          docker agent run ./auto-curator-agent/dgx-spark-curator.yaml \
+            "Check all links in the awesome list README.md for broken URLs. Report any broken or redirected links and create a PR to fix them if needed."
