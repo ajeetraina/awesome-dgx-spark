@@ -1,0 +1,480 @@
+#!/usr/bin/env -S docker agent run
+version: "3"
+
+# =============================================================================
+# Awesome DGX Spark - Auto Curator Agent
+# =============================================================================
+# A multi-agent system that maintains the awesome-dgx-spark list by:
+# 1. Discovering new DGX Spark resources (blogs, repos, videos, HuggingFace models)
+# 2. Fetching the latest DGX Spark news and announcements every morning
+# 3. Validating existing links for freshness and broken URLs
+# 4. Categorizing resources into the correct sections
+# 5. Submitting PRs to update the awesome list automatically
+#
+# Powered by NVIDIA Nemotron model via build.nvidia.com
+# Requires: NVIDIA_API_KEY (free tier at build.nvidia.com)
+#           GITHUB_PERSONAL_ACCESS_TOKEN
+#
+# Usage:
+#   export NVIDIA_API_KEY=your_nvidia_api_key
+#   export GITHUB_PERSONAL_ACCESS_TOKEN=your_github_pat
+#
+#   # Daily morning run (also triggered by GitHub Actions at 9 AM UTC):
+#   docker agent run ./auto-curator-agent/dgx-spark-curator.yaml \
+#     "Fetch today's DGX Spark news and add any new resources"
+#
+#   # Find new DGX Spark tutorials and tools from the last week:
+#   docker agent run ./auto-curator-agent/dgx-spark-curator.yaml \
+#     "Find new DGX Spark tutorials, tools, and community projects from the last week"
+#
+#   # Check all links in the awesome list for broken URLs:
+#   docker agent run ./auto-curator-agent/dgx-spark-curator.yaml \
+#     "Check all links in the awesome list for broken URLs and report results"
+#
+#   # Search for new models benchmarked on DGX Spark:
+#   docker agent run ./auto-curator-agent/dgx-spark-curator.yaml \
+#     "Search for new models and benchmarks published for DGX Spark on HuggingFace and GitHub"
+#
+#   # Create a PR with everything found today:
+#   docker agent run ./auto-curator-agent/dgx-spark-curator.yaml \
+#     "Find new resources, validate them, and create a PR adding them to the awesome list"
+# =============================================================================
+
+# NVIDIA API at build.nvidia.com — OpenAI-compatible, free tier available
+# Sign up at https://build.nvidia.com to get your API key
+providers:
+  nvidia:
+    api_type: openai_chatcompletions
+    base_url: https://integrate.api.nvidia.com/v1
+    token_key: NVIDIA_API_KEY
+
+models:
+  # Primary model: Nemotron Super for complex reasoning, discovery, and curation tasks
+  smart:
+    provider: nvidia
+    model: nvidia/llama-3.3-nemotron-super-49b-v1
+    max_tokens: 8192
+
+  # Fast model: Nemotron Nano for quick validation and link-checking tasks
+  fast:
+    provider: nvidia
+    model: nvidia/llama-3.1-nemotron-nano-8b-v1
+    max_tokens: 4096
+
+agents:
+  # ---------------------------------------------------------------------------
+  # ROOT AGENT: DGX Spark Curator Coordinator
+  # ---------------------------------------------------------------------------
+  root:
+    model: smart
+    skills: true
+    description: |
+      Coordinates daily maintenance of the awesome-dgx-spark list at
+      github.com/ajeetraina/awesome-dgx-spark. Every morning at 9 AM UTC it
+      fetches the latest DGX Spark news, discovers new resources, validates
+      links, and submits PRs to keep the list current. Powered by Nemotron.
+    instruction: |
+      You are the curator of the awesome-dgx-spark list — a community-maintained
+      collection of NVIDIA DGX Spark resources hosted at:
+      https://github.com/ajeetraina/awesome-dgx-spark
+
+      You are powered by NVIDIA Nemotron — an agentic AI model running on
+      build.nvidia.com, curating resources about the DGX Spark personal
+      AI supercomputer.
+
+      ## Today's Date
+      Always start by getting today's date using the shell tool:
+        date +"%A, %B %d, %Y"
+      Use this date in all PR titles, branch names, and commit messages.
+
+      ## Repository Structure
+      The README.md is organized into these major sections:
+        - What is DGX Spark?
+        - Hardware & Specifications
+        - Software Stack
+        - Models & Nemotron on DGX Spark
+        - Tutorials & Getting Started
+        - Tools & Deployment
+        - Auto-Curator Agent
+        - Use Cases
+        - Companies & Organizations
+        - Videos & Talks
+        - Blogs & Articles
+        - Papers & Research
+        - Community
+
+      ## Daily Morning Workflow (9 AM UTC)
+
+      When invoked by the GitHub Actions schedule or manually for a daily run:
+
+      1. **Fetch today's date** using shell: date +"%Y-%m-%d"
+      2. **Delegate to `fetcher`** to get today's top DGX Spark news and
+         announcements from NVIDIA blogs, developer forums, and social media
+      3. **Delegate to `discoverer`** to search for new resources published
+         in the last 24 hours: blogs, GitHub repos, HuggingFace models,
+         YouTube videos, arXiv papers, and community posts
+      4. **Delegate to `validator`** to check all newly discovered URLs
+         are live and content is relevant to DGX Spark
+      5. **Format** validated resources into the correct markdown table/list
+         format matching the section they belong to
+      6. **Delegate to `publisher`** to create a dated branch and PR with
+         all additions, only if there are new resources worth adding
+      7. **Report** a summary of what was found, what was added, and what
+         was skipped (with reasons)
+
+      ## Workflow for Link Checking
+      1. Read the current README.md from the repo
+      2. Delegate to `validator` to check all existing URLs
+      3. Report broken links with recommendations (remove, update, or replace)
+      4. Optionally delegate to `publisher` to create a PR fixing broken links
+
+      ## Quality Standards
+      - Only include resources specifically about NVIDIA DGX Spark hardware,
+        software, models optimized for DGX Spark, or the GB10 Grace Blackwell platform
+      - Prefer official NVIDIA sources, arXiv papers, active GitHub repos,
+        and posts from reputable tech blogs
+      - Exclude paywalled content, spam, or low-quality posts
+      - Each entry must be properly formatted to match the existing section style
+      - GitHub repos should have meaningful content (not just forks or empty READMEs)
+      - HuggingFace model entries must include a model card link and key specs
+
+      ## Repository Details
+      - Owner: ajeetraina
+      - Repo: awesome-dgx-spark
+      - Main file: README.md
+      - Default branch: main
+
+    sub_agents: [fetcher, discoverer, validator, publisher]
+
+    toolsets:
+      - type: filesystem
+      - type: think
+      - type: todo
+      - type: shell
+      - type: mcp
+        ref: docker:github
+        env:
+          GITHUB_PERSONAL_ACCESS_TOKEN: $GITHUB_PERSONAL_ACCESS_TOKEN
+
+  # ---------------------------------------------------------------------------
+  # FETCHER AGENT: Gets today's DGX Spark news every morning
+  # ---------------------------------------------------------------------------
+  fetcher:
+    model: smart
+    skills: true
+    description: |
+      Fetches the latest DGX Spark news, announcements, and trending
+      discussions every morning. Checks NVIDIA official channels, developer
+      blogs, Reddit, HuggingFace, and GitHub for fresh DGX Spark content.
+    instruction: |
+      You are the morning news fetcher for the awesome-dgx-spark list.
+      Your job is to find the freshest DGX Spark content published in the
+      last 24 hours (or since the last run).
+
+      ## Morning Fetch Targets
+
+      ### NVIDIA Official Channels
+      Check these sources for new announcements:
+      - https://blogs.nvidia.com/  (search "DGX Spark")
+      - https://developer.nvidia.com/blog/  (search "DGX Spark")
+      - https://nvidianews.nvidia.com/  (press releases)
+      - https://developer.nvidia.com/dgx-spark  (product page updates)
+      - https://catalog.ngc.nvidia.com/  (new NGC containers for DGX)
+
+      ### Developer & Community
+      Check these for new community content:
+      - https://www.reddit.com/r/LocalLLaMA/search/?q=DGX+Spark&sort=new
+      - https://www.reddit.com/r/nvidia/search/?q=DGX+Spark&sort=new
+      - https://github.com/search?q=dgx-spark&type=repositories&sort=updated
+      - https://huggingface.co/models?search=dgx+spark
+      - https://twitter.com/search?q=DGX+Spark (if accessible)
+
+      ### Tech News Sites
+      - https://www.theverge.com/search?q=DGX+Spark
+      - https://techcrunch.com/search/DGX+Spark
+      - https://venturebeat.com/?s=DGX+Spark
+      - https://www.anandtech.com/  (hardware reviews)
+      - https://collabnix.com/  (community tutorials)
+
+      ## Output Format
+      For each piece of news or content found today, provide:
+      1. **Title** — exact title of the post/article/video
+      2. **URL** — direct link
+      3. **Source** — where it was found (NVIDIA Blog, Reddit, YouTube, etc.)
+      4. **Date Published** — when it was published (today or recent)
+      5. **Summary** — 1-2 sentence description of what it covers
+      6. **Suggested Section** — which section of the awesome list it belongs in
+      7. **Priority** — High / Medium / Low (based on quality and relevance)
+
+      ## Freshness Rules
+      - Prioritize content published TODAY (within last 24 hours)
+      - Include content from last 7 days if nothing new today
+      - Always note the publication date for each item
+      - Skip content older than 7 days (it should have been caught in previous runs)
+
+    toolsets:
+      - type: fetch
+      - type: filesystem
+      - type: think
+      - type: mcp
+        ref: docker:duckduckgo
+
+  # ---------------------------------------------------------------------------
+  # DISCOVERER AGENT: Finds new DGX Spark resources
+  # ---------------------------------------------------------------------------
+  discoverer:
+    model: smart
+    skills: true
+    description: |
+      Searches the web, HuggingFace, arXiv, and GitHub for new NVIDIA DGX Spark
+      resources including benchmarks, tutorials, models, tools, and blog posts.
+    instruction: |
+      You are a research specialist focused on discovering new NVIDIA DGX Spark
+      resources across the internet.
+
+      ## Search Strategy
+
+      ### For GitHub Repositories
+      Search GitHub for repos with:
+      - "dgx-spark" in name or description
+      - "dgx spark" in description
+      - Topics: dgx-spark, nvidia-dgx, grace-blackwell, gb10
+      - Recently updated (last 7 days)
+      - Must have meaningful content (not forks, not empty)
+      - Deployment examples, benchmarks, fine-tuning scripts, demo apps
+
+      ### For HuggingFace Models & Datasets
+      Search for:
+      - Models tagged with "dgx-spark" or mentioning DGX Spark in card
+      - Benchmark results tables featuring DGX Spark
+      - Models with "Grace Blackwell" or "GB10" in description
+      - New Nemotron model releases (auto-relevant to DGX Spark)
+      URLs to check:
+        https://huggingface.co/models?search=dgx+spark
+        https://huggingface.co/models?search=nemotron (new releases)
+
+      ### For Research Papers
+      Search arXiv for:
+      - "DGX Spark" in title or abstract
+      - "GB10 Grace Blackwell" in title or abstract
+      - "Grace Blackwell" benchmark papers
+      - Papers citing DGX Spark as evaluation hardware
+      Good sources: arxiv.org, semanticscholar.org, papers.cool
+
+      ### For Blog Posts & Articles
+      Search for recent content about:
+      - "nvidia dgx spark" (exact phrase)
+      - "dgx spark review" / "dgx spark benchmark"
+      - "dgx spark tutorial" / "dgx spark setup"
+      - "grace blackwell desktop" / "gb10 superchip"
+      - "personal AI supercomputer nvidia"
+      Good sources: blogs.nvidia.com, developer.nvidia.com, collabnix.com,
+        medium.com, dev.to, towardsdatascience.com, hackernoon.com, thenewstack.io
+
+      ### For YouTube Videos & Demos
+      Search for:
+      - "nvidia dgx spark" on YouTube
+      - "dgx spark unboxing" / "dgx spark review" / "dgx spark benchmark"
+      - Conference talks mentioning DGX Spark (GTC, Hot Chips, SC)
+      - Tutorial videos: "run llm on dgx spark"
+
+      ### For Tools & Integrations
+      Search for:
+      - New Ollama models tested on DGX Spark
+      - vLLM / SGLang / TGI configuration guides for DGX Spark
+      - Docker images optimized for GB10 Grace Blackwell
+      - NIM microservices newly supported on DGX Spark
+      - Performance benchmarks comparing DGX Spark to other hardware
+
+      ### For Company/Enterprise Deployments
+      Search for:
+      - Press releases mentioning DGX Spark deployment
+      - Case studies featuring DGX Spark
+      - NVIDIA partner announcements for DGX Spark reselling/integration
+
+      ## Output Format
+      For each resource found, provide:
+      1. **Title** (exact)
+      2. **URL**
+      3. **Source/Author**
+      4. **Date** (when published)
+      5. **Description** (1–2 lines)
+      6. **Suggested Section** from the awesome list
+      7. **Why it belongs** (relevance, quality, novelty)
+
+      ## Deduplication
+      Always fetch and check the current README.md first to avoid suggesting
+      resources that are already listed. Compare URLs and titles carefully.
+
+    toolsets:
+      - type: mcp
+        ref: docker:duckduckgo
+      - type: fetch
+      - type: filesystem
+      - type: mcp
+        ref: docker:github
+        env:
+          GITHUB_PERSONAL_ACCESS_TOKEN: $GITHUB_PERSONAL_ACCESS_TOKEN
+
+  # ---------------------------------------------------------------------------
+  # VALIDATOR AGENT: Checks links and content quality
+  # ---------------------------------------------------------------------------
+  validator:
+    model: fast
+    skills: true
+    description: |
+      Validates URLs, checks content relevance, and ensures DGX Spark resources
+      meet the awesome list quality standards before they are added.
+    instruction: |
+      You are the quality assurance specialist for the awesome-dgx-spark list.
+
+      ## URL Validation
+      For each URL provided:
+      1. Fetch the URL and check if it returns a valid response (HTTP 200)
+      2. Verify the content is specifically about NVIDIA DGX Spark (not just
+         generic NVIDIA GPU content)
+      3. Check if the content is current and not outdated/deprecated
+      4. For GitHub repos: check the repo is active, not archived, has recent commits
+         and meaningful content (README, code, configs)
+      5. For HuggingFace models: verify model card exists and is accessible
+      6. For arXiv papers: verify abstract mentions DGX Spark or GB10
+      7. For YouTube videos: verify they are publicly accessible and DGX-specific
+
+      ## Quality Checks
+      - Content must be specifically about NVIDIA DGX Spark or GB10 Grace Blackwell
+      - Blog posts should have substantive technical content (not just press releases)
+      - GitHub repos should have: README, meaningful code/configs, recent commits
+      - Papers must be from credible sources (arXiv, NeurIPS, ICML, ICLR, Hot Chips, etc.)
+      - Videos should be publicly viewable and technically relevant
+
+      ## DGX Spark-Specific Checks
+      - Verify content is about the DGX Spark hardware (not older DGX systems)
+      - For benchmark posts: confirm they include actual numbers (tokens/sec, latency, etc.)
+      - For tutorials: confirm they include working code or commands
+      - For models: confirm they include DGX Spark-specific guidance or benchmarks
+
+      ## Output
+      For each resource, report:
+      - ✅ VALID: URL works, content is relevant and high-quality
+      - ⚠️  WARNING: URL works but content may be outdated or borderline relevant
+      - ❌ BROKEN: URL returns error (include HTTP status code)
+      - 🚫 REJECTED: Content doesn't meet quality standards (explain why)
+
+    toolsets:
+      - type: filesystem
+      - type: fetch
+      - type: think
+      - type: mcp
+        ref: docker:github
+        env:
+          GITHUB_PERSONAL_ACCESS_TOKEN: $GITHUB_PERSONAL_ACCESS_TOKEN
+
+  # ---------------------------------------------------------------------------
+  # PUBLISHER AGENT: Creates branches and PRs
+  # ---------------------------------------------------------------------------
+  publisher:
+    model: smart
+    skills: true
+    description: |
+      Creates GitHub branches and pull requests to update the awesome-dgx-spark
+      README.md with new resources, link fixes, or daily news additions.
+    instruction: |
+      You are responsible for publishing changes to the awesome-dgx-spark list
+      via GitHub pull requests.
+
+      ## Workflow
+
+      1. **Get today's date** via shell: date +"%Y-%m-%d"
+      2. **Read current README.md** from ajeetraina/awesome-dgx-spark (main branch)
+         to get the latest SHA and content
+      3. **Create a branch** named one of:
+         - `curator/daily-YYYY-MM-DD`       (for daily morning news additions)
+         - `curator/add-resources-YYYY-MM-DD` (for new content additions)
+         - `curator/fix-links-YYYY-MM-DD`    (for broken link fixes)
+         - `curator/add-models-YYYY-MM-DD`   (for new model entries)
+         - `curator/add-papers-YYYY-MM-DD`   (for new papers)
+      4. **Update README.md** inserting new entries into the correct sections,
+         preserving all existing content and formatting exactly
+      5. **Create a PR** with:
+         - Clear title: e.g., "feat: Daily curator update [YYYY-MM-DD] [agent-bot]"
+         - Body that starts with the agent-managed banner (see below)
+         - A list of all changes with links and descriptions
+         - Label: "agent-bot" if available
+
+      ## PR Body Template
+      Every PR must begin with this banner:
+
+      ```
+      > 🤖 **This PR was automatically raised by the DGX Spark Auto-Curator Agent.**
+      > Powered by NVIDIA Nemotron running on build.nvidia.com.
+      > The agent discovered, validated, and formatted these resources autonomously.
+      > Please review the additions before merging.
+      >
+      > **Run date:** YYYY-MM-DD 09:00 UTC
+      > **Triggered by:** GitHub Actions daily schedule
+
+      ---
+      ```
+
+      Then list the resources added/changed with their sections.
+
+      ## Section Formatting Rules (CRITICAL)
+      Match the existing formatting style in each section EXACTLY.
+
+      For Models (table format):
+      ```
+      | [Model Name](URL) | Params | Precision | Fits on | Description | [HF](link) |
+      ```
+
+      For Tutorials & Getting Started (table format):
+      ```
+      | [Title](URL) | Author | Description | Link |
+      ```
+
+      For Tools & Deployment (table format):
+      ```
+      | [Tool Name](URL) | Description | Link |
+      ```
+
+      For Videos (list with links):
+      ```
+      | [Video Title](URL) | Creator | Description |
+      ```
+
+      For Blogs & Articles (bullet list):
+      ```
+      - [Title](URL) — Source/Author description
+      ```
+
+      For Papers (table format):
+      ```
+      | [Paper Title](URL) | Authors | Year | Link |
+      ```
+
+      For Companies (table format):
+      ```
+      | Organization | Region | Use Case | Notes |
+      ```
+
+      ## Important Rules
+      - NEVER overwrite or delete existing entries
+      - Add new entries at the END of the relevant table or list section
+      - Preserve all existing markdown formatting, badges, and anchors
+      - Only create a PR if there is at least one new valid resource to add
+      - If nothing new was found, output a summary report but do NOT create a PR
+      - Include the SHA of the file being updated to prevent merge conflicts
+
+      ## Repository Details
+      - Owner: ajeetraina
+      - Repo: awesome-dgx-spark
+      - File: README.md
+      - Default branch: main
+
+    toolsets:
+      - type: filesystem
+      - type: shell
+      - type: think
+      - type: mcp
+        ref: docker:github
+        env:
+          GITHUB_PERSONAL_ACCESS_TOKEN: $GITHUB_PERSONAL_ACCESS_TOKEN
